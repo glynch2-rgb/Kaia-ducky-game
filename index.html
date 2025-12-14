@@ -1,0 +1,673 @@
+<!doctype html>
+
+<html lang="en">
+
+<head>
+
+<meta charset="utf-8" />
+
+<title>Times Table Duck — Levels 1-20 (16-20 = ×16..×20, 20 equations)</title>
+
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+
+<style>
+
+  body{font-family: system-ui, Arial; background:#9fd6ff; margin:0; padding:20px; display:flex; gap:20px; align-items:flex-start}
+
+  #ui{width:360px}
+
+  #game{background:#86c0ff; border-radius:10px; padding:12px; box-shadow:0 6px 24px rgba(0,0,0,.15)}
+
+  canvas{background:#cceeff; display:block; border-radius:6px}
+
+  h1{margin:0 0 8px 0; font-size:20px}
+
+  .row{display:flex; gap:8px; margin-bottom:8px; align-items:center}
+
+  button{padding:8px 12px; border-radius:6px; border:0; cursor:pointer}
+
+  #equations{background:#ffffffbb; padding:8px; border-radius:6px; min-height:84px; max-height:200px; overflow:auto}
+
+  .eq{font-weight:700; margin:4px 0}
+
+  #status{margin-top:8px}
+
+  .small{font-size:13px; color:#333}
+
+  #message{margin-top:8px; min-height:24px}
+
+</style>
+
+</head>
+
+<body>
+
+  <div id="ui">
+
+    <div id="game">
+
+      <h1>Times Table Duck — Clone</h1>
+
+      <div class="row">
+
+        <label>Level:</label>
+
+        <select id="levelSelect"></select>
+
+        <button id="startBtn">Start Level</button>
+
+      </div>
+
+      <div class="row">
+
+        <div class="small">Timer: <span id="timer">0</span>s</div>
+
+        <div class="small" style="margin-left:10px;">Solved: <span id="solved">0</span>/<span id="total">0</span></div>
+
+      </div>
+
+      <div id="equations" aria-live="polite"></div>
+
+      <div id="message" class="small"></div>
+
+      <canvas id="c" width="480" height="360"></canvas>
+
+    </div>
+
+    <div style="margin-top:12px" class="small">
+
+      Control: Arrow keys or WASD. Solve equations in the order shown. When all are solved a key appears — grab it and reach the door.
+
+    </div>
+
+  </div>
+
+
+
+<script>
+
+/* Simple grid-based duck game inspired by Times Table Duck.
+
+   Levels 1-15 are sample easier/random levels; Levels 16-20 each present 20 equations:
+
+   Level 16 => multiply by 16 (20 problems)
+
+   ...
+
+   Level 20 => multiply by 20 (20 problems)
+
+*/
+
+
+
+const canvas = document.getElementById('c');
+
+const ctx = canvas.getContext('2d');
+
+const TILE = 40;
+
+const COLS = Math.floor(canvas.width / TILE); // 12
+
+const ROWS = Math.floor(canvas.height / TILE); // 9
+
+const levelSelect = document.getElementById('levelSelect');
+
+const startBtn = document.getElementById('startBtn');
+
+const eqDiv = document.getElementById('equations');
+
+const timerSpan = document.getElementById('timer');
+
+const solvedSpan = document.getElementById('solved');
+
+const totalSpan = document.getElementById('total');
+
+const message = document.getElementById('message');
+
+
+
+let currentLevel = 1;
+
+let game = null;
+
+let keyTimer = null;
+
+
+
+// Fill level options 1..20
+
+for(let i=1;i<=20;i++){
+
+  const o = document.createElement('option'); o.value=i; o.textContent='Level '+i;
+
+  levelSelect.appendChild(o);
+
+}
+
+levelSelect.value = 1;
+
+
+
+levelSelect.addEventListener('change', ()=> currentLevel = Number(levelSelect.value));
+
+startBtn.addEventListener('click', ()=> startLevel(currentLevel));
+
+
+
+function startLevel(num){
+
+  game = new Game(num);
+
+  game.init();
+
+}
+
+
+
+class Game {
+
+  constructor(level){
+
+    this.level = level;
+
+    this.grid = createEmptyGrid(COLS, ROWS);
+
+    this.duck = {x:1, y:1};
+
+    this.key = null; // {x,y, visible}
+
+    this.door = {x:COLS-2, y:ROWS-2};
+
+    this.equations = [];
+
+    this.answersOnTiles = {}; // "x_y" -> value
+
+    this.order = []; // list of answers in order to step on
+
+    this.currentIndex = 0;
+
+    this.timeLeft = 15;
+
+    this.timerInterval = null;
+
+    this.solved = 0;
+
+    this.total = 0;
+
+    this.running = false;
+
+  }
+
+  init(){
+
+    this.populateEquations();
+
+    this.placeAnswerTiles();
+
+    this.duck = {x:1, y:1};
+
+    this.key = {x: null, y: null, visible:false};
+
+    this.currentIndex = 0;
+
+    this.solved = 0;
+
+    this.total = this.equations.length;
+
+    solvedSpan.textContent = this.solved;
+
+    totalSpan.textContent = this.total;
+
+    timerSpan.textContent = this.timeLeft;
+
+    this.running = true;
+
+    message.textContent = 'Solve in order. Good luck!';
+
+    this.startTimer();
+
+    draw();
+
+  }
+
+  populateEquations(){
+
+    this.equations = [];
+
+    if(this.level >= 16 && this.level <= 20){
+
+      // Levels 16-20: 20 equations multiplying by (level)
+
+      const multiplier = this.level;
+
+      const problems = 20;
+
+      // Randomize multipliers 1..12 (or 1..10) but let's use 1..12
+
+      for(let i=0;i<problems;i++){
+
+        const k = Math.floor(Math.random()*12)+1;
+
+        this.equations.push({text:`${multiplier} × ${k} =`, a: multiplier*k});
+
+      }
+
+    } else {
+
+      // For lower levels create 6-10 quick equations (mixed)
+
+      const count = Math.min(10, 5 + Math.floor(this.level/2));
+
+      for(let i=0;i<count;i++){
+
+        const a = Math.floor(Math.random()*(Math.min(12, this.level+3)))+1;
+
+        const b = Math.floor(Math.random()*(Math.min(12, this.level+3)))+1;
+
+        this.equations.push({text:`${a} × ${b} =`, a:a*b});
+
+      }
+
+    }
+
+    // Build order array
+
+    this.order = this.equations.map(e=>e.a);
+
+  }
+
+  placeAnswerTiles(){
+
+    // Clear any previous
+
+    this.answersOnTiles = {};
+
+    // Collect all answers (may include duplicates). We'll place them randomly across grid tiles except walls.
+
+    const positions = [];
+
+    for(let y=1;y<ROWS-1;y++){
+
+      for(let x=1;x<COLS-1;x++){
+
+        // reserve duck start and door tile
+
+        if((x===this.duck.x && y===this.duck.y) || (x===this.door.x && y===this.door.y)) continue;
+
+        positions.push({x,y});
+
+      }
+
+    }
+
+    shuffleArray(positions);
+
+    // For each answer in order, place one tile with that number
+
+    // If number of answers > positions, allow reuse (but we made positions plenty)
+
+    for(let i=0;i<this.order.length;i++){
+
+      const pos = positions[i % positions.length];
+
+      this.answersOnTiles[`${pos.x}_${pos.y}`] = {value:this.order[i], used:false};
+
+    }
+
+    // Fill some additional decoy tiles with other numbers
+
+    let idx = this.order.length;
+
+    for(let p=idx; idx < Math.min(positions.length, this.order.length + 10); idx++){
+
+      const pos = positions[idx];
+
+      // random decoy value
+
+      const decoy = Math.floor(Math.random()*240)+1;
+
+      this.answersOnTiles[`${pos.x}_${pos.y}`] = {value:decoy, used:false};
+
+    }
+
+  }
+
+  startTimer(){
+
+    if(this.timerInterval) clearInterval(this.timerInterval);
+
+    this.timeLeft = 15;
+
+    timerSpan.textContent = this.timeLeft;
+
+    this.timerInterval = setInterval(()=>{
+
+      this.timeLeft--;
+
+      timerSpan.textContent = this.timeLeft;
+
+      if(this.timeLeft <= 0){
+
+        clearInterval(this.timerInterval);
+
+        this.running = false;
+
+        message.textContent = 'Time up! Press Start Level to try again.';
+
+      }
+
+    }, 1000);
+
+  }
+
+  stopTimer(){ if(this.timerInterval) clearInterval(this.timerInterval); }
+
+  move(dx,dy){
+
+    if(!this.running) return;
+
+    const nx = this.duck.x + dx;
+
+    const ny = this.duck.y + dy;
+
+    if(nx < 0 || nx >= COLS || ny < 0 || ny >= ROWS) return;
+
+    this.duck.x = nx; this.duck.y = ny;
+
+    this.checkTile();
+
+    draw();
+
+  }
+
+  checkTile(){
+
+    const key = `${this.duck.x}_${this.duck.y}`;
+
+    // If key is visible and duck on key => pick up
+
+    if(this.key.visible && this.key.x === this.duck.x && this.key.y === this.duck.y){
+
+      this.key.visible = false;
+
+      message.textContent = 'Key picked up! Now reach the door.';
+
+      // mark door as unlocked (let reaching door win)
+
+      this.door.locked = false;
+
+    }
+
+    // Door
+
+    if(this.duck.x === this.door.x && this.duck.y === this.door.y){
+
+      if(this.door.locked !== false){
+
+        // need key yet
+
+        // nothing
+
+      } else {
+
+        // win level
+
+        this.running = false;
+
+        this.stopTimer();
+
+        message.textContent = 'Level cleared! Press Start Level to play again.';
+
+      }
+
+    }
+
+    // Check if tile is an answer tile
+
+    if(this.answersOnTiles[key] && !this.answersOnTiles[key].used){
+
+      const val = this.answersOnTiles[key].value;
+
+      const expected = this.order[this.currentIndex];
+
+      if(val === expected){
+
+        // correct: mark used, increment index
+
+        this.answersOnTiles[key].used = true;
+
+        this.currentIndex++;
+
+        this.solved++;
+
+        solvedSpan.textContent = this.solved;
+
+        message.textContent = `Correct: ${val}`;
+
+        // If finished all equations: spawn key at random reachable tile near door
+
+        if(this.currentIndex >= this.order.length){
+
+          this.spawnKey();
+
+        }
+
+      } else {
+
+        // wrong — penalize a second
+
+        this.timeLeft = Math.max(0, this.timeLeft - 1);
+
+        message.textContent = `Wrong tile (${val}). -1s penalty.`;
+
+      }
+
+    }
+
+  }
+
+  spawnKey(){
+
+    // place key near door or random empty tile
+
+    // find an empty tile not occupied by used answers
+
+    for(let y=ROWS-2; y>=1; y--){
+
+      for(let x=COLS-2; x>=1; x--){
+
+        const k = `${x}_${y}`;
+
+        if(!this.answersOnTiles[k]){
+
+          this.key = {x,y,visible:true};
+
+          // lock door until key picked
+
+          this.door.locked = true;
+
+          message.textContent = 'All equations solved! Key appeared — pick it up and go to the door.';
+
+          return;
+
+        }
+
+      }
+
+    }
+
+    // fallback
+
+    this.key = {x: this.door.x-1, y:this.door.y, visible:true};
+
+    this.door.locked = true;
+
+    message.textContent = 'All solved! Key appeared.';
+
+  }
+
+}
+
+
+
+function draw(){
+
+  // clear
+
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  // background grid
+
+  for(let y=0;y<ROWS;y++){
+
+    for(let x=0;x<COLS;x++){
+
+      ctx.strokeStyle = '#9ccaff';
+
+      ctx.strokeRect(x*TILE, y*TILE, TILE, TILE);
+
+    }
+
+  }
+
+  if(!game) return;
+
+  // draw answer tiles
+
+  ctx.font = 'bold 14px Arial';
+
+  ctx.textAlign = 'center';
+
+  ctx.textBaseline = 'middle';
+
+  for(const k in game.answersOnTiles){
+
+    const [x,y] = k.split('_').map(Number);
+
+    const tile = game.answersOnTiles[k];
+
+    const px = x*TILE, py = y*TILE;
+
+    ctx.fillStyle = tile.used ? '#ddffdd' : '#fff9c4';
+
+    ctx.fillRect(px+4, py+4, TILE-8, TILE-8);
+
+    ctx.fillStyle = '#000';
+
+    ctx.fillText(tile.value, px + TILE/2, py + TILE/2);
+
+  }
+
+  // door
+
+  ctx.fillStyle = game.door.locked === false ? '#8bd34b' : '#b5651d';
+
+  ctx.fillRect(game.door.x*TILE+4, game.door.y*TILE+4, TILE-8, TILE-8);
+
+  ctx.fillStyle = '#fff';
+
+  ctx.fillText('DOOR', game.door.x*TILE + TILE/2, game.door.y*TILE + TILE/2);
+
+  // key
+
+  if(game.key && game.key.visible){
+
+    ctx.fillStyle = '#ffd700';
+
+    ctx.fillRect(game.key.x*TILE+12, game.key.y*TILE+14, TILE-24, TILE-12);
+
+    ctx.fillStyle = '#000';
+
+    ctx.fillText('KEY', game.key.x*TILE + TILE/2, game.key.y*TILE + TILE/2 + 8);
+
+  }
+
+  // duck
+
+  ctx.fillStyle = '#ff8a65';
+
+  ctx.beginPath();
+
+  ctx.ellipse(game.duck.x*TILE + TILE/2, game.duck.y*TILE + TILE/2, TILE/2 -6, TILE/2 -10, 0, 0, Math.PI*2);
+
+  ctx.fill();
+
+  ctx.fillStyle = '#000';
+
+  ctx.fillText('DUCK', game.duck.x*TILE + TILE/2, game.duck.y*TILE + TILE/2);
+
+  // update UI panel
+
+  // equations order display
+
+  renderEquationsPanel();
+
+}
+
+
+
+function renderEquationsPanel(){
+
+  if(!game) return;
+
+  eqDiv.innerHTML = '';
+
+  for(let i=0;i<game.equations.length;i++){
+
+    const e = game.equations[i];
+
+    const div = document.createElement('div');
+
+    div.className = 'eq';
+
+    if(i < game.currentIndex) div.style.opacity = '0.4';
+
+    if(i === game.currentIndex) div.style.color = '#0077cc';
+
+    div.textContent = `${i+1}. ${e.text}   ${i < game.currentIndex ? e.a : '___'}`;
+
+    eqDiv.appendChild(div);
+
+  }
+
+}
+
+
+
+function createEmptyGrid(w,h){ const g=[]; for(let y=0;y<h;y++){ g[y]=[]; for(let x=0;x<w;x++) g[y][x]=0;} return g;}
+
+function shuffleArray(a){ for(let i=a.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [a[i],a[j]]=[a[j],a[i]]; } return a; }
+
+
+
+// Keyboard controls
+
+document.addEventListener('keydown', (ev)=>{
+
+  if(!game || !game.running) return;
+
+  if(ev.key === 'ArrowUp' || ev.key === 'w' || ev.key === 'W') game.move(0,-1);
+
+  if(ev.key === 'ArrowDown' || ev.key === 's' || ev.key === 'S') game.move(0,1);
+
+  if(ev.key === 'ArrowLeft' || ev.key === 'a' || ev.key === 'A') game.move(-1,0);
+
+  if(ev.key === 'ArrowRight' || ev.key === 'd' || ev.key === 'D') game.move(1,0);
+
+});
+
+
+
+// Start first level automatically
+
+startLevel(1);
+
+
+
+// For accessibility: clicking start uses chosen level
+
+</script>
+
+</body>
+
+</html>
